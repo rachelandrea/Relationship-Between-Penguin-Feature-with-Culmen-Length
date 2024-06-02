@@ -1,0 +1,508 @@
+---
+title: "haheho"
+author: "Pandu Jatayu Satrio Aji"
+date: "2023-12-04"
+output: html_document
+---
+
+
+### 1. Load Library Needed
+```{r}
+library(rjags)
+```
+
+### 2. Load the Data
+```{r}
+data <- read.csv('penguins_lter.csv')
+
+study_name <- data[,1]
+sample_num <- data[,2]
+species <- data[,3]
+region <- data[,4]
+island <- data[,5]
+stage <- data[,6]
+individual_id <- data[,7]
+clutch_completion <- data[,8]
+date_egg <- data[,9]
+culmen_length <- data[,10]
+culmen_depth <- data[,11]
+flipper_length <- data[,12]
+body_mass <- data[,13]
+sex <- data[,14]
+delta_N <- data[,15]
+delta_C <- data[,16]
+comment <- data[,17]
+```
+
+### 3. Encoding (Convert Categorical Data Type to Numeric that We Need)
+```{r}
+data$Sex[data$Sex == "MALE"] <- 1
+data$Sex[data$Sex == "FEMALE"] <- 0
+data$Sex <- as.numeric(data$Sex, coerce=TRUE)
+```
+
+```{r}
+data$Clutch.Completion[data$Clutch.Completion == "Yes"] <- 1
+data$Clutch.Completion[data$Clutch.Completion == "No"] <- 0
+data$Clutch.Completion <- as.numeric(data$Clutch.Completion, coerce=TRUE)
+```
+
+```{r}
+data$Flipper.Length..mm. <- as.numeric(data$Flipper.Length..mm., coerce=TRUE)
+data$Body.Mass..g. <- as.numeric(data$Body.Mass..g., coerce=TRUE)
+```
+
+```{r}
+str(data)
+```
+
+
+```{r}
+View(data)
+```
+
+```{r}
+clutch_completion <- data[,8]
+date_egg <- data[,9]
+culmen_length <- data[,10]
+culmen_depth <- data[,11]
+flipper_length <- data[,12]
+body_mass <- data[,13]
+sex <- data[,14]
+delta_N <- data[,15]
+delta_C <- data[,16]
+```
+
+### 4. Plot Data
+```{r}
+Y <- culmen_length
+X <- cbind(clutch_completion,
+           culmen_depth, flipper_length, body_mass,
+           sex, delta_N, delta_C)
+names <- c("Clutch completion", "Culmen depth",
+           "Flipper length", "Body mass", "Sex", "Delta N", "Delta C")
+
+# Remove observations with NA values
+
+junk <- is.na(rowSums(X))
+Y <- Y[!junk]
+X <- X[!junk,]
+study_name <- study_name[!junk]
+sample_num <- sample_num[!junk]
+species <- species[!junk]
+region <- region[!junk]
+island <- island[!junk]
+stage <- stage[!junk]
+individual_id <- individual_id[!junk]
+date_egg <- date_egg[!junk]
+comment <- comment[!junk]
+
+# Standardize the covariates
+
+X <- as.matrix(scale(X))
+```
+
+```{r}
+names <- c("Clutch completion", "Culmen depth",
+           "Flipper length", "Body mass", "Sex", "Delta N", "Delta C")
+for(j in 1:7){
+  boxplot(X[,j]~Y, main=names[j])
+}
+```
+
+
+### 5.Put Data in JAGS Format
+```{r}
+n <- length(Y)
+p <- ncol(X)
+
+data <- list(Y=Y, X=X, n=n, p=p)
+params <- c("beta")
+
+burn <- 10000
+n.iter <- 20000
+thin <- 10
+n.chains <- 3
+```
+
+### 6. Fit the Uninformative Gaussian Model (Model 1)
+```{r}
+model_string <- textConnection("model{
+                # Likelihood
+                for(i in 1: n){
+                  Y[i] ~ dnorm(alpha+inprod(X[i,], beta[]), taue)
+                }
+                # Priors
+                for(j in 1: p){
+                  beta[j] ~ dnorm(0, 0.001)
+                }
+                alpha ~ dnorm(0, 0.001)
+                taue ~ dgamma(0.1, 0.1)
+                
+                # for WAIC calculations
+                for(i in 1:n){
+                like[i] <- dnorm(Y[i], inprod(X[i,], beta[]), taue)
+                }
+}")
+
+model <- jags.model(model_string, data = data, n.chains = n.chains, quiet = TRUE)
+update(model, burn, progress.bar = "none")
+samples1 <- coda.samples(model, variable.names = params, n.thin = thin, n.iter = n.iter)
+
+par(mar=c(2,2,2,2))
+plot(samples1)
+```
+
+
+```{r}
+sum <- summary(samples1)
+rownames(sum$statistics) <- names
+rownames(sum$quantiles) <- names
+sum$statistics <- round(sum$statistics,3)
+sum$quantiles <- round(sum$quantiles,3)
+sum
+```
+
+### 7. Summarize the marginal distributions (Model 1)
+```{r}
+beta <- NULL
+  for(l in 1:n.chains){
+    beta <- rbind(beta,samples1[[l]])
+  }
+  colnames(beta) <- names
+  for(j in 1:7){
+    hist(beta[,j],xlab=expression(UninformativeGaussianModel),ylab="Posterior density",
+    breaks=100,main=names[j])
+}
+
+```
+
+```{r}
+library(knitr)
+Inc_Prob <- apply(beta!=0,2,mean)
+Q <- t(apply(beta,2,quantile,c(0.5,0.05,0.95)))
+out <- cbind(Inc_Prob,Q)
+kable(round(out,2))
+```
+
+### 8. Compute the posterior probability of each model (Model 1)
+```{r}
+model_a <- "Intercept"
+for(j in 1:7){
+  model_a <- paste(model_a,ifelse(beta[,j]==0,"","+"))
+  model_a <- paste(model_a,ifelse(beta[,j]==0,"",names[j]))
+}
+model_a[1:5]
+```
+
+```{r}
+beta[1:5,]
+```
+### 9. SSVS result (this model dominate the posterior probability)
+```{r}
+model_probs <- table(model_a)/length(model_a)
+model_probs <- sort(model_probs,dec=T)
+round(model_probs,3)
+```
+
+
+### 10. Convergence diagnostics model 1
+```{r}
+autocorr.plot(samples1)
+```
+
+#### Numerical diagnostics
+```{r}
+# Low autocorrelation indicates convergence
+autocorr(samples1[[1]],lag=1)
+```
+
+```{r}
+# ESS over 1000 indicates convergence
+effectiveSize(samples1)
+```
+
+```{r}
+# Gelman-Rubin statistic
+# R less than 1.1 indicates convergence
+gelman.diag(samples1)
+```
+
+```{r}
+# Geweke diagnostic
+# |z| less than 2 indicates convergence
+geweke.diag(samples1[[1]])
+```
+### 11. Model Performance (Model 1)
+```{r}
+# DIC
+dic1 <- dic.samples(model, n.iter = 20000, n.thin= 10, progress.bar = "none")
+dic1
+```
+
+```{r}
+# WAIC
+waic1 <- coda.samples(model, variable.names=c("like"), n.iter = n.iter, progress.bar="none")
+beta1 <- waic1[[1]]
+fbar1 <- colMeans(beta1)
+P1 <- sum(apply(log(beta1), 2, var))
+waic_1 <- -2*sum(log(fbar1)) + 2*P1
+waic_1
+```
+
+### 12. Plot Data (Model 2 with only high convergence)
+```{r}
+Y2 <- culmen_length
+X2 <- cbind(clutch_completion,
+           culmen_depth,
+           delta_N, delta_C)
+names2 <- c("Clutch completion", "Culmen depth",
+            "Delta N", "Delta C")
+
+# Remove observations with NA values
+
+junk <- is.na(rowSums(X2))
+Y2 <- Y2[!junk]
+X2 <- X2[!junk,]
+study_name <- study_name[!junk]
+sample_num <- sample_num[!junk]
+species <- species[!junk]
+region <- region[!junk]
+island <- island[!junk]
+stage <- stage[!junk]
+individual_id <- individual_id[!junk]
+date_egg <- date_egg[!junk]
+comment <- comment[!junk]
+
+# Standardize the covariates
+
+X2 <- as.matrix(scale(X2))
+```
+
+### 13. Put Data in JAGS Format (model 2)
+```{r}
+n2 <- length(Y2)
+p2 <- ncol(X2)
+
+data2 <- list(Y=Y2, X=X2, n=n2, p=p2)
+params <- c("beta")
+
+burn <- 10000
+n.iter <- 20000
+thin <- 10
+n.chains <- 3
+```
+
+### 14. Fit the Uninformative Gaussian Model (model 2)
+```{r}
+model_string <- textConnection("model{
+                # Likelihood
+                for(i in 1: n){
+                  Y[i] ~ dnorm(alpha+inprod(X[i,], beta[]), taue)
+                }
+                # Priors
+                for(j in 1: p){
+                  beta[j] ~ dnorm(0, 0.001)
+                }
+                alpha ~ dnorm(0, 0.001)
+                taue ~ dgamma(0.1, 0.1)
+                
+                # For compute WAIC
+                for(i in 1:n){
+                like[i] <- dnorm(Y[i], inprod(X[i,], beta[]), taue)
+                }
+                
+}")
+
+model2 <- jags.model(model_string, data = data2, n.chains = n.chains, quiet = TRUE)
+update(model2, burn, progress.bar = "none")
+samples2 <- coda.samples(model2, variable.names = params, n.thin = thin, n.iter = n.iter)
+
+par(mar=c(2, 2, 2, 2))
+plot(samples2)
+```
+
+```{r}
+sum <- summary(samples2)
+rownames(sum$statistics) <- names2
+rownames(sum$quantiles) <- names2
+sum$statistics <- round(sum$statistics,3)
+sum$quantiles <- round(sum$quantiles,3)
+sum
+```
+
+### 15. Summarize the marginal distributions (model 2)
+```{r}
+beta <- NULL
+  for(l in 1:n.chains){
+    beta <- rbind(beta,samples2[[l]])
+  }
+  colnames(beta) <- names2
+  for(j in 1:4){
+    hist(beta[,j],xlab=expression(UninformativeGaussianModel2),ylab="Posterior density",
+    breaks=100,main=names2[j])
+}
+
+```
+
+```{r}
+library(knitr)
+Inc_Prob <- apply(beta!=0,2,mean)
+Q <- t(apply(beta,2,quantile,c(0.5,0.05,0.95)))
+out <- cbind(Inc_Prob,Q)
+kable(round(out,2))
+```
+
+### 16. Compute the posterior probability of each model
+```{r}
+model_b <- "Intercept"
+for(j in 1:4){
+  model_b <- paste(model_b,ifelse(beta[,j]==0,"","+"))
+  model_b <- paste(model_b,ifelse(beta[,j]==0,"",names2[j]))
+}
+model_b[1:5]
+```
+
+```{r}
+beta[1:5,]
+```
+
+```{r}
+model_probs <- table(model_b)/length(model_b)
+model_probs <- sort(model_probs,dec=T)
+round(model_probs,3)
+```
+
+### 17. Convergence diagnostics model 2
+```{r}
+autocorr.plot(samples2)
+```
+
+#### Numerical diagnostics
+```{r}
+# Low autocorrelation indicates convergence
+autocorr(samples2[[1]],lag=1)
+```
+
+```{r}
+# ESS over 1000 indicates convergence
+effectiveSize(samples2)
+```
+
+```{r}
+# Gelman-Rubin statistic
+# R less than 1.1 indicates convergence
+gelman.diag(samples2)
+```
+
+```{r}
+# Geweke diagnostic
+# |z| less than 2 indicates convergence
+geweke.diag(samples2[[1]])
+```
+
+### 18. Model Performance (Model 2)
+```{r}
+# DIC
+dic2 <- dic.samples(model2, n.iter = 20000, n.thin= 10, progress.bar = "none")
+dic2
+```
+
+```{r}
+# WAIC
+waic2 <- coda.samples(model2, variable.names=c("like"), n.iter = n.iter, progress.bar="none")
+beta2 <- waic2[[1]]
+fbar2 <- colMeans(beta2)
+P2 <- sum(apply(log(beta2), 2, var))
+waic_2 <- -2*sum(log(fbar2)) + 2*P2
+waic_2
+```
+
+
+### 19. Fit the Gaussian Shrinkage Model (additional model)
+
+```{r}
+model_string <- textConnection("model{
+                # Likelihood
+                  for(i in 1:n){
+                    Y[i] ~ dnorm(alpha+inprod(X[i,],beta[]),taue)
+                  }
+                # Priors
+                  for(j in 1:p){
+                    beta[j] ~ dnorm(0,taue*taub)
+                  }
+                  alpha ~ dnorm(0,0.001)
+                  taue ~ dgamma(0.1, 0.1)
+                  taub ~ dgamma(0.1, 0.1)
+                  
+                  # For compute WAIC
+                  for(i in 1:n){
+                  like[i] <- dnorm(Y[i], inprod(X[i,], beta[]), taue)
+                  }
+                }")
+
+model3 <- jags.model(model_string,data = data, n.chains=n.chains,quiet=TRUE)
+update(model3, burn, progress.bar="none")
+samples3 <- coda.samples(model3, variable.names=params, n.thin=thin, n.iter=n.iter)
+
+par(mar=c(2,2,2,2))
+plot(samples3)
+```
+
+
+```{r}
+names <- c("Clutch completion", "Culmen depth",
+           "Flipper length", "Body mass", "Sex", "Delta N", "Delta C")
+sum <- summary(samples3)
+rownames(sum$statistics) <- names
+rownames(sum$quantiles) <- names
+sum$statistics <- round(sum$statistics,3)
+sum$quantiles <- round(sum$quantiles,3)
+sum
+```
+
+### 20. Convergence diagnostics model 3
+```{r}
+autocorr.plot(samples3)
+```
+
+#### Numerical diagnostics
+```{r}
+# Low autocorrelation indicates convergence
+autocorr(samples3[[1]],lag=1)
+```
+
+```{r}
+# ESS over 1000 indicates convergence
+effectiveSize(samples3)
+```
+
+```{r}
+# Gelman-Rubin statistic
+# R less than 1.1 indicates convergence
+gelman.diag(samples3)
+```
+
+```{r}
+# Geweke diagnostic
+# |z| less than 2 indicates convergence
+geweke.diag(samples3[[1]])
+```
+
+### 21. Model Performance for Additional Model
+```{r}
+dic3 <- dic.samples(model3, n.iter = 20000, n.thin= 10, progress.bar = "none")
+dic3
+```
+
+```{r}
+waic3 <- coda.samples(model3, variable.names=c("like"), n.iter = n.iter, progress.bar="none")
+beta3 <- waic3[[1]]
+fbar3 <- colMeans(beta3)
+P3 <- sum(apply(log(beta3), 2, var))
+waic_3 <- -2*sum(log(fbar3)) + 2*P3
+waic_3
+```
+
+
+### Thank you
